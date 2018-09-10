@@ -1,49 +1,131 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
-
-	"github.com/dghubble/go-twitter/twitter"
-	"github.com/dghubble/oauth1"
+	"github.com/lovoo/goka"
+	"github.com/lovoo/goka/codec"
 )
 
-var addr = flag.String("addr", "localhost:8080", "http service address")
+var (
+	addr     = flag.String("addr", "localhost:8080", "http service address")
+	upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+	brokers             = []string{"localhost:9092"}
+	topic   goka.Stream = "example-stream"
+	group   goka.Group  = "example-group"
+)
 
-var upgrader = websocket.Upgrader{} // use default options
+const (
+	listener = "listener"
+	producer = "producer"
+)
+
+func startProducer() {
+	log.Println("Starting the producer")
+	emitter, err := goka.NewEmitter(brokers, topic, new(codec.String))
+	if err != nil {
+		log.Fatalf("error creating emitter: %v", err)
+	}
+	log.Println("Emitter created")
+	defer emitter.Finish()
+	for {
+		err = emitter.EmitSync("some-key", time.Now().String())
+		if err != nil {
+			log.Fatalf("error emitting message: %v", err)
+		}
+		log.Println("message emitted")
+		time.Sleep(2 * time.Second)
+	}
+}
 
 func main() {
-	//client := login()
 	log.SetFlags(0)
 	log.Println("Starting...")
-	http.HandleFunc("/getTweets", getTweets)
-	log.Fatal(http.ListenAndServe(*addr, nil))
-	//tweetsListener(client)
+
+	modePtr := flag.String("mode", listener, "string value: listener or producer")
+	flag.Parse()
+	mode := *modePtr
+	switch mode {
+	case listener:
+		http.HandleFunc("/getTweets", getTweets)
+		log.Fatal(http.ListenAndServe(*addr, nil))
+	case producer:
+		startProducer()
+	default:
+		log.Fatal("Not recognized mode. Please set mode to listener or producer.")
+	}
 }
 
 func getTweets(w http.ResponseWriter, r *http.Request) {
-	log.Println("got request:", r.Body)
-	message := readFile("C:\\Go\\json.json")
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Print("upgrade:", err)
 		return
 	}
 	defer c.Close()
-	for {
-		err = c.WriteMessage(websocket.TextMessage, message)
+	// process callback is invoked for each message delivered from
+	// "example-stream" topic.
+	cb := func(ctx goka.Context, msg interface{}) {
+
+		var counter int64
+		// ctx.Value() gets from the group table the value that is stored for
+		// the message's key.
+		if val := ctx.Value(); val != nil {
+			counter = val.(int64)
+		}
+		counter++
+		// SetValue stores the incremented counter in the group table for in
+		// the message's key.
+		ctx.SetValue(counter)
+		log.Printf("key = %s, counter = %v, msg = %v", ctx.Key(), counter, msg)
+		msgString := msg.(string)
+		err = c.WriteMessage(websocket.TextMessage, []byte(msgString))
 		if err != nil {
 			log.Println("write:", err)
-			break
 		}
 	}
+
+	// Define a new processor group. The group defines all inputs, outputs, and
+	// serialization formats. The group-table topic is "example-group-table".
+	g := goka.DefineGroup(group,
+		goka.Input(topic, new(codec.String), cb),
+		goka.Persist(new(codec.Int64)),
+	)
+
+	p, err := goka.NewProcessor(brokers, g)
+	if err != nil {
+		log.Fatalf("error creating processor: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool)
+	go func() {
+		defer close(done)
+		if err = p.Run(ctx); err != nil {
+			log.Fatalf("error running processor: %v", err)
+		}
+	}()
+
+	wait := make(chan os.Signal, 1)
+	signal.Notify(wait, syscall.SIGINT, syscall.SIGTERM)
+	<-wait   // wait for SIGINT/SIGTERM
+	cancel() // gracefully stop processor
+	<-done
 }
 
 func readFile(filename string) []byte {
@@ -60,59 +142,4 @@ func readFile(filename string) []byte {
 
 	byteValue, _ := ioutil.ReadAll(jsonFile)
 	return byteValue
-}
-
-func login() *twitter.Client {
-	consumerKey := os.Getenv("CONSUMER_KEY")
-	consumerSecret := os.Getenv("CONSUMER_SECRET")
-	accessToken := os.Getenv("ACCESS_TOKEN")
-	accessSecret := os.Getenv("ACCESS_SECRET")
-
-	// boilerplate for go-twitter
-	config := oauth1.NewConfig(consumerKey, consumerSecret)
-	token := oauth1.NewToken(accessToken, accessSecret)
-
-	httpClient := config.Client(oauth1.NoContext, token)
-	client := twitter.NewClient(httpClient)
-
-	verifyParams := &twitter.AccountVerifyParams{
-		SkipStatus:   twitter.Bool(true),
-		IncludeEmail: twitter.Bool(true),
-	}
-	_, _, err := client.Accounts.VerifyCredentials(verifyParams)
-	if err != nil {
-		fmt.Println("WOAH ERROR WITH CREDENTIALS")
-		panic(err)
-	}
-	return client
-}
-
-func tweetsListener(client *twitter.Client) {
-	params := &twitter.SearchTweetParams{
-		Query:      "#golang",
-		Count:      5,
-		ResultType: "recent",
-		Lang:       "en",
-	}
-
-	for {
-		searchResult, _, _ := client.Search.Tweets(params)
-		tweets := searchResult.Statuses
-		fmt.Printf("Found %v Tweets\n", len(tweets))
-		sinceIDs := make([]int64, 0)
-		for _, tweet := range tweets {
-			sinceIDs = append(sinceIDs, tweet.ID)
-		}
-		if len(tweets) > 0 {
-			finalSinceID := sinceIDs[0]
-			for _, sinceID := range sinceIDs {
-				if finalSinceID < sinceID {
-					finalSinceID = sinceID
-				}
-			}
-			params.SinceID = finalSinceID
-		}
-		time.Sleep(60 * time.Second)
-		fmt.Printf("Begin again with SinceID %v \n", params.SinceID)
-	}
 }
