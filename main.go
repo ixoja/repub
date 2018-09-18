@@ -1,52 +1,109 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/segmentio/kafka-go"
 
-	"github.com/dghubble/go-twitter/twitter"
-	"github.com/dghubble/oauth1"
+	"github.com/gorilla/websocket"
 )
 
-var addr = flag.String("addr", "localhost:8080", "http service address")
+var (
+	addr     = flag.String("addr", "localhost:8080", "http service address")
+	upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+	brokers = []string{"localhost:9092"}
+)
 
-var upgrader = websocket.Upgrader{} // use default options
+const (
+	consumer = "consumer"
+	producer = "producer"
+	topic    = "Topic-1"
+)
 
-func main() {
-	//client := login()
-	log.SetFlags(0)
-	log.Println("Starting...")
-	http.HandleFunc("/getTweets", getTweets)
-	log.Fatal(http.ListenAndServe(*addr, nil))
-	//tweetsListener(client)
+func startProducer() {
+	log.Println("Starting the producer")
+	writer := kafka.NewWriter(kafka.WriterConfig{
+		Brokers: brokers,
+		Topic:   topic,
+	})
+	defer writer.Close()
+	for {
+		writer.WriteMessages(context.Background(),
+			kafka.Message{
+				Key:   []byte("Key-A"),
+				Value: []byte(time.Now().String()),
+			},
+		)
+
+		log.Println("message produced")
+		time.Sleep(2 * time.Second)
+	}
+
 }
 
-func getTweets(w http.ResponseWriter, r *http.Request) {
-	log.Println("got request:", r.Body)
-	message := readFile("C:\\Go\\json.json")
-	c, err := upgrader.Upgrade(w, r, nil)
+func main() {
+	log.SetFlags(0)
+	log.Println("Starting...")
+
+	modePtr := flag.String("mode", consumer, "string value: consumer or producer")
+	flag.Parse()
+	mode := *modePtr
+	switch mode {
+	case consumer:
+		http.HandleFunc("/getTweets", getTweets)
+		log.Fatal(http.ListenAndServe(*addr, nil))
+	case producer:
+		startProducer()
+	default:
+		log.Fatal("Not recognized mode. Please set mode to consumer or producer.")
+	}
+}
+
+func getTweets(w http.ResponseWriter, request *http.Request) {
+	connection, err := upgrader.Upgrade(w, request, nil)
 	if err != nil {
 		log.Print("upgrade:", err)
 		return
 	}
-	defer c.Close()
+	defer connection.Close()
+
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:   brokers,
+		Topic:     topic,
+		Partition: 0,
+		MinBytes:  10e3, // 10KB
+		MaxBytes:  10e6, // 10MB
+	})
+	reader.SetOffset(42)
+
 	for {
-		err = c.WriteMessage(websocket.TextMessage, message)
+		m, err := reader.ReadMessage(context.Background())
 		if err != nil {
-			log.Println("write:", err)
 			break
 		}
+		messageString := fmt.Sprintf("message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+
+		err = connection.WriteMessage(websocket.TextMessage, []byte(messageString))
+		if err != nil {
+			log.Println("write:", err)
+		}
 	}
+
+	reader.Close()
 }
 
-func readFile(filename string) []byte {
+/* func readFile(filename string) []byte {
 	log.Println("Opening the file ", filename)
 	// Open our jsonFile
 	jsonFile, err := os.Open(filename)
@@ -60,59 +117,4 @@ func readFile(filename string) []byte {
 
 	byteValue, _ := ioutil.ReadAll(jsonFile)
 	return byteValue
-}
-
-func login() *twitter.Client {
-	consumerKey := os.Getenv("CONSUMER_KEY")
-	consumerSecret := os.Getenv("CONSUMER_SECRET")
-	accessToken := os.Getenv("ACCESS_TOKEN")
-	accessSecret := os.Getenv("ACCESS_SECRET")
-
-	// boilerplate for go-twitter
-	config := oauth1.NewConfig(consumerKey, consumerSecret)
-	token := oauth1.NewToken(accessToken, accessSecret)
-
-	httpClient := config.Client(oauth1.NoContext, token)
-	client := twitter.NewClient(httpClient)
-
-	verifyParams := &twitter.AccountVerifyParams{
-		SkipStatus:   twitter.Bool(true),
-		IncludeEmail: twitter.Bool(true),
-	}
-	_, _, err := client.Accounts.VerifyCredentials(verifyParams)
-	if err != nil {
-		fmt.Println("WOAH ERROR WITH CREDENTIALS")
-		panic(err)
-	}
-	return client
-}
-
-func tweetsListener(client *twitter.Client) {
-	params := &twitter.SearchTweetParams{
-		Query:      "#golang",
-		Count:      5,
-		ResultType: "recent",
-		Lang:       "en",
-	}
-
-	for {
-		searchResult, _, _ := client.Search.Tweets(params)
-		tweets := searchResult.Statuses
-		fmt.Printf("Found %v Tweets\n", len(tweets))
-		sinceIDs := make([]int64, 0)
-		for _, tweet := range tweets {
-			sinceIDs = append(sinceIDs, tweet.ID)
-		}
-		if len(tweets) > 0 {
-			finalSinceID := sinceIDs[0]
-			for _, sinceID := range sinceIDs {
-				if finalSinceID < sinceID {
-					finalSinceID = sinceID
-				}
-			}
-			params.SinceID = finalSinceID
-		}
-		time.Sleep(60 * time.Second)
-		fmt.Printf("Begin again with SinceID %v \n", params.SinceID)
-	}
-}
+} */
