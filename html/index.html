@@ -27,11 +27,12 @@
          websocket.onerror = function(evt) {
             onError(evt)
          };
+
+         doSend("ConnectionStart")
       }
 		
       function onOpen(evt) {
          writeToScreen("CONNECTED");
-         doSend("WebSocket rocks");
       }
 		
       function onMessage(evt) {
@@ -53,12 +54,38 @@
          pre.style.wordWrap = "break-word"; 
          pre.innerHTML = message; output.appendChild(pre);
       }
+
+      function subscribe() {
+            var obj = new Object();
+            obj.topic = input.value;
+            obj.subscribe = true;
+            var jsonString= JSON.stringify(obj);
+		doSend(jsonString);
+      }
+      
+      function unsubscribe() {
+		var obj = new Object();
+            obj.topic = input.value;
+            obj.subscribe = false;
+            var jsonString= JSON.stringify(obj);
+		doSend(jsonString);
+      }
+
+      function clear(){
+            while (output.firstChild) {
+                  output.removeChild(output.firstChild);
+            }
+      }
 		
       window.addEventListener("load", init, false);
 		
    </script>
 	
    <h2>Twitter Test</h2>
+   <input id="input" type="text" value="Topic-1"/>
+   <button onclick="subscribe()">Subscribe</button>
+   <button onclick="unsubscribe()">Unsubscribe</button>
+   <button onclick="clear()">Clear</button>
    <div id = "output"></div> 
 	
 </html>

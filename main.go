@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/astaxie/beego/session"
+	_ "github.com/astaxie/beego/session/redis"
 	"github.com/segmentio/kafka-go"
 
 	"github.com/gorilla/websocket"
@@ -22,26 +25,29 @@ var (
 			return true
 		},
 	}
-	brokers = []string{"localhost:9092"}
+	brokers        = []string{"localhost:9092"}
+	globalSessions *session.Manager
 )
 
 const (
-	consumer = "consumer"
-	producer = "producer"
-	topic    = "Topic-1"
+	subscriptions = "subscriptions"
+	consumer      = "consumer"
+	producer      = "producer"
+	topicOne      = "Topic-1"
+	key           = "Key-A"
 )
 
 func startProducer() {
 	log.Println("Starting the producer")
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: brokers,
-		Topic:   topic,
+		Topic:   topicOne,
 	})
 	defer writer.Close()
 	for {
 		writer.WriteMessages(context.Background(),
 			kafka.Message{
-				Key:   []byte("Key-A"),
+				Key:   []byte(key),
 				Value: []byte(time.Now().String()),
 			},
 		)
@@ -59,8 +65,17 @@ func main() {
 	modePtr := flag.String("mode", consumer, "string value: consumer or producer")
 	flag.Parse()
 	mode := *modePtr
+
 	switch mode {
 	case consumer:
+		sessionConfig := &session.ManagerConfig{
+			CookieName:     "gosessionid",
+			Gclifetime:     3600,
+			ProviderConfig: "127.0.0.1:6379,100",
+		}
+		globalSessions, _ = session.NewManager("redis", sessionConfig)
+		go globalSessions.GC()
+
 		http.HandleFunc("/getTweets", getTweets)
 		log.Fatal(http.ListenAndServe(*addr, nil))
 	case producer:
@@ -71,6 +86,10 @@ func main() {
 }
 
 func getTweets(w http.ResponseWriter, request *http.Request) {
+	sess, _ := globalSessions.SessionStart(w, request)
+	sess.Set(subscriptions, make(map[string]interface{}))
+	defer sess.SessionRelease(w)
+
 	connection, err := upgrader.Upgrade(w, request, nil)
 	if err != nil {
 		log.Print("upgrade:", err)
@@ -78,29 +97,70 @@ func getTweets(w http.ResponseWriter, request *http.Request) {
 	}
 	defer connection.Close()
 
-	reader := kafka.NewReader(kafka.ReaderConfig{
+	callback := func(msg string) {
+		err = connection.WriteMessage(websocket.TextMessage, []byte(msg))
+		if err != nil {
+			log.Println("write:", err)
+		}
+	}
+
+	for {
+		_, message, err := connection.ReadMessage()
+		if err != nil {
+			log.Println("read:", err)
+			break
+		}
+
+		var dat map[string]interface{}
+		if err := json.Unmarshal(message, &dat); err != nil {
+			panic(err)
+		}
+
+		if shouldSubscribe, ok := dat["subscribe"].(bool); ok {
+			topic := dat["topic"].(string)
+			subsMap := sess.Get(subscriptions).(map[string]interface{})
+			if shouldSubscribe {
+				if _, alreadySubscribed := subsMap[topic]; !alreadySubscribed {
+					go subscribe(topic, sess, callback)
+				}
+			} else {
+				delete(subsMap, topic)
+			}
+		}
+	}
+}
+
+func subscribe(topic string, session session.Store, callback func(string)) {
+	subsMap := session.Get(subscriptions).(map[string]interface{})
+	subsMap[topic] = nil
+
+	kafkaReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:   brokers,
 		Topic:     topic,
 		Partition: 0,
 		MinBytes:  10e3, // 10KB
 		MaxBytes:  10e6, // 10MB
 	})
-	reader.SetOffset(42)
+
+	defer kafkaReader.Close()
 
 	for {
-		m, err := reader.ReadMessage(context.Background())
+		m, err := kafkaReader.ReadMessage(context.Background())
 		if err != nil {
 			break
 		}
-		messageString := fmt.Sprintf("message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
 
-		err = connection.WriteMessage(websocket.TextMessage, []byte(messageString))
-		if err != nil {
-			log.Println("write:", err)
+		if _, stillSubscribed := subsMap[topic]; stillSubscribed {
+			messageString := fmt.Sprintf("message at offset %d: %s = %s\n", m.Offset, string(m.Key), string(m.Value))
+
+			if err != nil {
+				log.Println("write:", err)
+				break
+			}
+
+			callback(messageString)
 		}
 	}
-
-	reader.Close()
 }
 
 /* func readFile(filename string) []byte {
