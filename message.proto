@@ -1,0 +1,8 @@
+syntax="proto3";
+package main;
+
+message SubscriptionEvent{
+    string session = 1;
+    string topic = 2;
+    bool subscribe = 3;
+}

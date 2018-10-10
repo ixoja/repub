@@ -2,7 +2,7 @@
 <html>
    <meta charset = "utf-8" />
    <title>WebSocket Test</title>
-   
+   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
    <script language = "javascript" type = "text/javascript">
 
       var wsUri = "ws://localhost:8080/getTweets";
@@ -10,10 +10,14 @@
 		
       function init() {
          output = document.getElementById("output");
-         testWebSocket();
+         $.get( "http://localhost:8080/login", function(output, status, xhr) {
+            alert(xhr.getResponseHeader("Set-Cookie"));
+            writeToScreen("Logged in successfully.");
+            startWebSocket();
+         });
       }
 		
-      function testWebSocket() {
+      function startWebSocket() {
          websocket = new WebSocket(wsUri);
 			
          websocket.onopen = function(evt) {
