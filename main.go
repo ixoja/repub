@@ -57,13 +57,6 @@ func main() {
 	}
 }
 
-/*func initSessionManager() {
-	sessionConfig := &session.ManagerConfig{
-		CookieName:     "gosessionid",
-		ProviderConfig: "127.0.0.1:6379,100",
-	}
-}*/
-
 func subscribe(topic string, callback func(string, []byte, int64)) {
 	kafkaReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:   brokers,
@@ -82,6 +75,6 @@ func subscribe(topic string, callback func(string, []byte, int64)) {
 			break
 		}
 
-		callback(string(m.Key), m.Value, m.Offset)
+		callback(topic, m.Value, m.Offset)
 	}
 }

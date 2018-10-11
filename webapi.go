@@ -112,8 +112,8 @@ func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 			writer.WriteMessages(context.Background(), kafka.Message{Value: bytes})
 		}
 
-		callback := func(key string, value []byte, offset int64) {
-			msg := fmt.Sprintf("message at offset %d: %s = %s\n", offset, key, string(value))
+		callback := func(sess string, value []byte, offset int64) {
+			msg := fmt.Sprintf("message at offset %d: %s = %s\n", offset, sess, string(value))
 			if conn, ok := GetWS(sess); ok {
 				if conn != nil {
 					err = conn.WriteMessage(websocket.TextMessage, []byte(msg))
@@ -125,6 +125,7 @@ func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 			}
 		}
 
+		//TODO: check if we already subscribed on topic
 		go subscribe(sess, callback)
 	}
 }
