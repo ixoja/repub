@@ -10,13 +10,12 @@
 		
       function init() {
          output = document.getElementById("output");
-         $.get( "http://localhost:8080/login", function(output, status, xhr) {
-            alert(xhr.getResponseHeader("Set-Cookie"));
+         $.get( "http://localhost:8080/login", function(output, status, xhr) { 
             writeToScreen("Logged in successfully.");
             startWebSocket();
          });
       }
-		
+
       function startWebSocket() {
          websocket = new WebSocket(wsUri);
 			

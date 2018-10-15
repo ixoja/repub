@@ -25,6 +25,7 @@ var (
 		sync.RWMutex
 		m map[string]*websocket.Conn
 	}{m: make(map[string]*websocket.Conn)}
+	wg sync.WaitGroup
 )
 
 const (
@@ -39,15 +40,13 @@ func main() {
 	log.SetFlags(0)
 	log.Println("Starting...")
 
-	modePtr := flag.String("mode", webapi, "string value: webapi, server or producer")
+	modePtr := flag.String("mode", server, "string value: webapi, server or producer")
 	flag.Parse()
 	mode := *modePtr
 
 	switch mode {
 	case webapi:
-		http.HandleFunc("/login", login)
-		http.HandleFunc("/getTweets", getTweets)
-		log.Fatal(http.ListenAndServe(*addr, nil))
+		startWebServer()
 	case server:
 		startServer()
 	case producer:
@@ -55,9 +54,11 @@ func main() {
 	default:
 		log.Fatal("Not recognized mode. Please set mode to webapi, server or producer.")
 	}
+
+	wg.Wait()
 }
 
-func subscribe(topic string, callback func(string, []byte, int64)) {
+func subscribe(topic string, callback func(string, []byte, int64) bool) {
 	kafkaReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:   brokers,
 		Topic:     topic,
@@ -66,6 +67,7 @@ func subscribe(topic string, callback func(string, []byte, int64)) {
 		MaxBytes:  10e6, // 10MB
 	})
 
+	defer wg.Done()
 	defer kafkaReader.Close()
 
 	for {
@@ -75,6 +77,15 @@ func subscribe(topic string, callback func(string, []byte, int64)) {
 			break
 		}
 
-		callback(topic, m.Value, m.Offset)
+		if ok := callback(topic, m.Value, m.Offset); !ok {
+			break
+		}
 	}
+}
+
+func startWebServer() {
+	http.Handle("/", http.FileServer(http.Dir("./html")))
+	http.HandleFunc("/login", login)
+	http.HandleFunc("/getTweets", getTweets)
+	log.Fatal(http.ListenAndServe(*addr, nil))
 }

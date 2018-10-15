@@ -13,7 +13,9 @@ import (
 var pool *redis.Pool
 
 func startServer() {
+	//resubscribe()
 	log.Println("Subscribing to kafka topic:", subsEvents)
+	wg.Add(1)
 	go subscribe(subsEvents, ReactToSubscriptionEvents)
 
 	log.Println("Initializing Redis pool.")
@@ -23,7 +25,7 @@ func startServer() {
 	log.Println("Server successfully started.")
 }
 
-func ReactToSubscriptionEvents(key string, value []byte, offset int64) {
+func ReactToSubscriptionEvents(key string, value []byte, offset int64) bool {
 	subsEvent := &SubscriptionEvent{}
 	proto.Unmarshal(value, subsEvent)
 
@@ -49,10 +51,12 @@ func ReactToSubscriptionEvents(key string, value []byte, offset int64) {
 	} else {
 		unsubscribeFromChannel(session, topic)
 	}
+
+	return true
 }
 
 func connectToRedis() error {
-	pool := &redis.Pool{
+	pool = &redis.Pool{
 		Dial: func() (redis.Conn, error) {
 			c, err := redis.Dial("tcp", "127.0.0.1:6379")
 			if err != nil {
@@ -67,13 +71,12 @@ func connectToRedis() error {
 	return pool.Get().Err()
 }
 
-func subscribeToChannel(session string, topic string) {
-	saveToRedis(session, topic)
-	saveToRedis(topic, session)
-
-	callback := func(topic string, value []byte, offset int64) {
+func subscribeToKafka(session string, topic string) {
+	callback := func(topic string, value []byte, offset int64) bool {
 		sessionsToUpdate := readFromRedis(topic)
-
+		if len(sessionsToUpdate) == 0 {
+			return false
+		}
 		for _, session := range sessionsToUpdate {
 			kafkaWriter := kafka.NewWriter(kafka.WriterConfig{
 				Brokers: brokers,
@@ -82,9 +85,20 @@ func subscribeToChannel(session string, topic string) {
 
 			kafkaWriter.WriteMessages(context.Background(), kafka.Message{Value: value})
 		}
+		return true
 	}
-	//TODO: check if we already subscribed on topic
+
+	wg.Add(1)
 	go subscribe(topic, callback)
+}
+
+func subscribeToChannel(session string, topic string) {
+	if !isSubscribed(session, topic) {
+		saveToRedis(session, topic)
+		saveToRedis(topic, session)
+
+		subscribeToKafka(session, topic)
+	}
 }
 
 func unsubscribeFromChannel(session string, topic string) {
@@ -93,13 +107,35 @@ func unsubscribeFromChannel(session string, topic string) {
 }
 
 func saveToRedis(key string, value string) {
-
+	conn := pool.Get()
+	defer conn.Close()
+	conn.Do("HSET", key, value, "")
 }
 
 func readFromRedis(key string) []string {
+	result := []string{}
+	conn := pool.Get()
+	defer conn.Close()
 
+	values, _ := redis.Values(conn.Do("HKEYS", key))
+	redis.ScanSlice(values, &result)
+	return result
 }
 
 func deleteFromRedis(key string, value string) {
+	conn := pool.Get()
+	defer conn.Close()
+	conn.Do("HDEL", key, value)
+}
 
+func isSubscribed(session string, topic string) bool {
+	conn := pool.Get()
+	defer conn.Close()
+
+	res, _ := redis.Int(conn.Do("HEXISTS", session, topic))
+	if res == 1 {
+		return true
+	} else {
+		return false
+	}
 }

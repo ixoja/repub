@@ -15,8 +15,10 @@ const (
 
 func startProducer() {
 	log.Println("Starting the producer")
+	wg.Add(1)
 	go publishTopic(topicOne)
-	publishTopic(topicTwo)
+	wg.Add(1)
+	go publishTopic(topicTwo)
 }
 
 func publishTopic(topic string) {
