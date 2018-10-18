@@ -13,10 +13,9 @@ import (
 var pool *redis.Pool
 
 func startServer() {
-	//resubscribe()
 	log.Println("Subscribing to kafka topic:", subsEvents)
-	wg.Add(1)
-	go subscribe(subsEvents, ReactToSubscriptionEvents)
+
+	go kafkaSubscriber.subscribe(subsEvents, ReactToSubscriptionEvents)
 
 	log.Println("Initializing Redis pool.")
 	if err := connectToRedis(); err != nil {
@@ -25,7 +24,7 @@ func startServer() {
 	log.Println("Server successfully started.")
 }
 
-func ReactToSubscriptionEvents(key string, value []byte, offset int64) bool {
+func ReactToSubscriptionEvents(key string, value []byte, offset int64) {
 	subsEvent := &SubscriptionEvent{}
 	proto.Unmarshal(value, subsEvent)
 
@@ -37,22 +36,20 @@ func ReactToSubscriptionEvents(key string, value []byte, offset int64) bool {
 		Brokers: brokers,
 		Topic:   session,
 	})
+	message := fmt.Sprintf("Received a subscription event. SessionID=%s, Topic=%s, Subscribe=%t",
+		session,
+		topic,
+		shouldSubscribe)
+	log.Println(message)
 
 	kafkaWriter.WriteMessages(context.Background(),
-		kafka.Message{
-			Value: []byte(fmt.Sprintf("Received a subscription event. SessionID=%s, Topic=%s, Subscribe=%t",
-				session,
-				topic,
-				shouldSubscribe)),
-		})
+		kafka.Message{Value: []byte(message)})
 
 	if shouldSubscribe {
 		subscribeToChannel(session, topic)
 	} else {
 		unsubscribeFromChannel(session, topic)
 	}
-
-	return true
 }
 
 func connectToRedis() error {
@@ -72,10 +69,11 @@ func connectToRedis() error {
 }
 
 func subscribeToKafka(session string, topic string) {
-	callback := func(topic string, value []byte, offset int64) bool {
+	callback := func(topic string, value []byte, offset int64) {
 		sessionsToUpdate := readFromRedis(topic)
 		if len(sessionsToUpdate) == 0 {
-			return false
+			log.Println("Received update for 0 sessions. Unsubscribing from topic:", topic)
+			kafkaSubscriber.unsubscribe(topic)
 		}
 		for _, session := range sessionsToUpdate {
 			kafkaWriter := kafka.NewWriter(kafka.WriterConfig{
@@ -85,15 +83,14 @@ func subscribeToKafka(session string, topic string) {
 
 			kafkaWriter.WriteMessages(context.Background(), kafka.Message{Value: value})
 		}
-		return true
 	}
 
-	wg.Add(1)
-	go subscribe(topic, callback)
+	go kafkaSubscriber.subscribe(topic, callback)
 }
 
 func subscribeToChannel(session string, topic string) {
 	if !isSubscribed(session, topic) {
+		log.Println("Initializing subscription for session", session, "on topic", topic)
 		saveToRedis(session, topic)
 		saveToRedis(topic, session)
 
@@ -109,7 +106,10 @@ func unsubscribeFromChannel(session string, topic string) {
 func saveToRedis(key string, value string) {
 	conn := pool.Get()
 	defer conn.Close()
-	conn.Do("HSET", key, value, "")
+	_, err := conn.Do("HSET", key, value, "")
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func readFromRedis(key string) []string {
@@ -117,7 +117,10 @@ func readFromRedis(key string) []string {
 	conn := pool.Get()
 	defer conn.Close()
 
-	values, _ := redis.Values(conn.Do("HKEYS", key))
+	values, err := redis.Values(conn.Do("HKEYS", key))
+	if err != nil {
+		log.Println(err)
+	}
 	redis.ScanSlice(values, &result)
 	return result
 }
@@ -125,14 +128,22 @@ func readFromRedis(key string) []string {
 func deleteFromRedis(key string, value string) {
 	conn := pool.Get()
 	defer conn.Close()
-	conn.Do("HDEL", key, value)
+
+	_, err := conn.Do("HDEL", key, value)
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func isSubscribed(session string, topic string) bool {
 	conn := pool.Get()
 	defer conn.Close()
 
-	res, _ := redis.Int(conn.Do("HEXISTS", session, topic))
+	res, err := redis.Int(conn.Do("HEXISTS", session, topic))
+	if err != nil {
+		log.Println(err)
+	}
+
 	if res == 1 {
 		return true
 	} else {

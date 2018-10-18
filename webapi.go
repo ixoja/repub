@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	fmt "fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	proto "github.com/golang/protobuf/proto"
@@ -15,7 +17,30 @@ import (
 	kafka "github.com/segmentio/kafka-go"
 )
 
+var (
+	addr     = flag.String("addr", "localhost:8080", "http service address")
+	upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+	connections = struct {
+		sync.RWMutex
+		m map[string]*websocket.Conn
+	}{m: make(map[string]*websocket.Conn)}
+)
+
 const sessionString = "session"
+
+func startWebServer() {
+	http.Handle("/", http.FileServer(http.Dir("./html")))
+	http.HandleFunc("/login", login)
+	http.HandleFunc("/getTweets", getTweets)
+	log.Println("Registering web server on:", addr)
+	log.Fatal(http.ListenAndServe(*addr, nil))
+}
 
 func ExtractSession(request *http.Request) (string, bool) {
 	if sessionCookie, err := request.Cookie(sessionString); err == nil {
@@ -30,7 +55,8 @@ func ExtractSession(request *http.Request) (string, bool) {
 }
 
 func login(respWriter http.ResponseWriter, request *http.Request) {
-	if _, ok := ExtractSession(request); ok {
+	if sess, ok := ExtractSession(request); ok {
+		log.Println("Logging in a known user. Session id:", sess)
 		return
 	}
 
@@ -46,7 +72,7 @@ func login(respWriter http.ResponseWriter, request *http.Request) {
 	connections.m[sess] = nil
 	connections.Unlock()
 	log.Println("Session ID created: ", sess)
-	fmt.Fprint(respWriter, "{}")
+	fmt.Fprint(respWriter, "{OK}")
 }
 
 func getTweets(respWriter http.ResponseWriter, request *http.Request) {
@@ -56,7 +82,7 @@ func getTweets(respWriter http.ResponseWriter, request *http.Request) {
 	} else {
 		connection, err := upgrader.Upgrade(respWriter, request, nil)
 		if err != nil {
-			log.Print("upgrade:", err)
+			log.Print("WebSocket opening error:", err)
 			return
 		}
 
@@ -84,6 +110,7 @@ func CloseConnection(session string) {
 	connections.m[session].Close()
 	connections.m[session] = nil
 	connections.Unlock()
+	log.Println("Connection closed for session ID:", session)
 }
 
 func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn, sess string) {
@@ -94,15 +121,18 @@ func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 	for {
 		_, message, err := connection.ReadMessage()
 		if err != nil {
-			log.Println("read:", err)
+			log.Println("Error reading from Kafka:", err)
 			break
 		}
 
 		var pb SubscriptionEvent
 		if err := json.Unmarshal(message, &pb); err != nil {
-			log.Fatal(err)
+			log.Println(err)
 			break
 		}
+		log.Println("Received a subscription event. Session:", pb.GetSession(),
+			"Topic:", pb.GetTopic(),
+			"Subscribe:", pb.GetSubscribe())
 
 		pb.Session = sess
 		if bytes, err := proto.Marshal(&pb); err != nil {
@@ -112,8 +142,8 @@ func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 			writer.WriteMessages(context.Background(), kafka.Message{Value: bytes})
 		}
 
-		callback := func(sess string, value []byte, offset int64) bool {
-			msg := fmt.Sprintf("message at offset %d: %s = %s\n", offset, sess, string(value))
+		callback := func(sess string, value []byte, offset int64) {
+			msg := fmt.Sprintf("message at offset %d: %s\n", offset, string(value))
 			if conn, ok := GetWS(sess); ok {
 				if conn != nil {
 					err = conn.WriteMessage(websocket.TextMessage, []byte(msg))
@@ -123,12 +153,9 @@ func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 				} else { /*TODO: add buffering logic for disconnected sessions*/
 				}
 			}
-			return true
 		}
 
-		//TODO: check if we already subscribed on topic
-		wg.Add(1)
-		go subscribe(sess, callback)
+		go kafkaSubscriber.subscribe(sess, callback)
 	}
 }
 

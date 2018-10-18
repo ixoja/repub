@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -27,15 +28,16 @@ func publishTopic(topic string) {
 		Topic:   topic,
 	})
 	defer writer.Close()
+	defer wg.Done()
+
 	for {
 		writer.WriteMessages(context.Background(),
 			kafka.Message{
-				Value: []byte(time.Now().String()),
+				Value: []byte(fmt.Sprint(topic, time.Now())),
 			},
 		)
 
-		log.Println("message produced")
+		log.Println("message produced", topic)
 		time.Sleep(2 * time.Second)
 	}
-
 }
