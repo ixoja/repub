@@ -24,7 +24,7 @@ func main() {
 	log.SetFlags(0)
 	log.Println("Starting...")
 
-	modePtr := flag.String("mode", server, "string value: webapi, server or producer")
+	modePtr := flag.String("mode", webapi, "string value: webapi, server or producer")
 	flag.Parse()
 	mode := *modePtr
 

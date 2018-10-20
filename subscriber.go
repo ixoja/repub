@@ -40,7 +40,7 @@ func (ks *KafkaSubscriber) subscribe(topic string, callback func(string, []byte,
 	kafkaReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:   brokers,
 		Topic:     topic,
-		Partition: 0,
+		GroupID:   "group",
 		MinBytes:  10e3, // 10KB
 		MaxBytes:  10e6, // 10MB
 	})

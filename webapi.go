@@ -33,8 +33,10 @@ var (
 )
 
 const sessionString = "session"
+const sessionsIndex = "sessions"
 
 func startWebServer() {
+	tryToRestoreWebapi()
 	http.Handle("/", http.FileServer(http.Dir("./html")))
 	http.HandleFunc("/login", login)
 	http.HandleFunc("/getTweets", getTweets)
@@ -68,9 +70,7 @@ func login(respWriter http.ResponseWriter, request *http.Request) {
 		Expires: time.Now().Add(time.Duration(time.Hour * 24 * 30))}
 	http.SetCookie(respWriter, &cookie)
 
-	connections.Lock()
-	connections.m[sess] = nil
-	connections.Unlock()
+	AddConnection(sess, nil)
 	log.Println("Session ID created: ", sess)
 	fmt.Fprint(respWriter, "{OK}")
 }
@@ -86,10 +86,7 @@ func getTweets(respWriter http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		connections.Lock()
-		connections.m[sess] = connection
-		connections.Unlock()
-
+		AddConnection(sess, connection)
 		defer CloseConnection(sess)
 
 		processMessages(respWriter, connection, sess)
@@ -111,6 +108,12 @@ func CloseConnection(session string) {
 	connections.m[session] = nil
 	connections.Unlock()
 	log.Println("Connection closed for session ID:", session)
+}
+
+func AddConnection(session string, connection *websocket.Conn) {
+	connections.Lock()
+	connections.m[session] = connection
+	connections.Unlock()
 }
 
 func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn, sess string) {
@@ -142,20 +145,7 @@ func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 			writer.WriteMessages(context.Background(), kafka.Message{Value: bytes})
 		}
 
-		callback := func(sess string, value []byte, offset int64) {
-			msg := fmt.Sprintf("message at offset %d: %s\n", offset, string(value))
-			if conn, ok := GetWS(sess); ok {
-				if conn != nil {
-					err = conn.WriteMessage(websocket.TextMessage, []byte(msg))
-					if err != nil {
-						log.Println("write:", err)
-					}
-				} else { /*TODO: add buffering logic for disconnected sessions*/
-				}
-			}
-		}
-
-		go kafkaSubscriber.subscribe(sess, callback)
+		go kafkaSubscriber.subscribe(sess, subscriberCallback)
 	}
 }
 
@@ -164,4 +154,28 @@ func GetWS(sessionID string) (*websocket.Conn, bool) {
 	conn, ok := connections.m[sessionID]
 	connections.RUnlock()
 	return conn, ok
+}
+
+func subscriberCallback(sess string, value []byte, offset int64) {
+	msg := fmt.Sprintf("message at offset %d: %s\n", offset, string(value))
+	if conn, ok := GetWS(sess); ok {
+		if conn != nil {
+			err := conn.WriteMessage(websocket.TextMessage, []byte(msg))
+			if err != nil {
+				log.Println("write:", err)
+			}
+		} else { /*TODO: add buffering logic for disconnected sessions*/
+		}
+	}
+}
+
+func tryToRestoreWebapi() {
+	redisApi := RedisApi{}
+	redisApi.connect()
+	defer redisApi.disconnect()
+
+	sessions := redisApi.getIndex(sessionsIndex)
+	for _, session := range sessions {
+		AddConnection(session, nil)
+	}
 }
