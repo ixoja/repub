@@ -35,35 +35,35 @@ var (
 const sessionString = "session"
 const sessionsIndex = "sessions"
 
-func startWebServer() {
-	tryToRestoreWebapi()
+func StartWebServer() {
+	TryToRestoreWebapi()
 	http.Handle("/", http.FileServer(http.Dir("./html")))
-	http.HandleFunc("/login", login)
-	http.HandleFunc("/getTweets", getTweets)
+	http.HandleFunc("/login", Login)
+	http.HandleFunc("/getTweets", GetTweets)
 	log.Println("Registering web server on:", addr)
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
 func ExtractSession(request *http.Request) (string, bool) {
 	if sessionCookie, err := request.Cookie(sessionString); err == nil {
-		session := sessionCookie.Value
-		_, knownSession := GetWS(session)
+		sess := sessionCookie.Value
+		_, knownSession := GetWS(sess)
 		if knownSession {
-			return session, true
+			return sess, true
 		}
 	}
 
 	return "", false
 }
 
-func login(respWriter http.ResponseWriter, request *http.Request) {
+func Login(respWriter http.ResponseWriter, request *http.Request) {
 	if sess, ok := ExtractSession(request); ok {
 		log.Println("Logging in a known user. Session id:", sess)
 		return
 	}
 
 	log.Println("Starting a new session")
-	sess, _ := sessionID()
+	sess, _ := SessionID()
 
 	cookie := http.Cookie{Name: sessionString,
 		Value:   sess,
@@ -75,10 +75,11 @@ func login(respWriter http.ResponseWriter, request *http.Request) {
 	fmt.Fprint(respWriter, "{OK}")
 }
 
-func getTweets(respWriter http.ResponseWriter, request *http.Request) {
+func GetTweets(respWriter http.ResponseWriter, request *http.Request) {
 	sess, ok := ExtractSession(request)
 	if !ok {
 		log.Print("Unknown session")
+		return
 	} else {
 		connection, err := upgrader.Upgrade(respWriter, request, nil)
 		if err != nil {
@@ -86,14 +87,19 @@ func getTweets(respWriter http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		if c, ok := GetWS(sess); ok && c != nil {
+			log.Print("WARN: trying to establish connection for session, which is already connected. Session ID:", sess)
+			return
+		}
 		AddConnection(sess, connection)
 		defer CloseConnection(sess)
+		go kafkaSubscriber.Subscribe(sess, SubscriberCallback)
 
-		processMessages(respWriter, connection, sess)
+		ProcessMessages(respWriter, connection, sess)
 	}
 }
 
-func sessionID() (string, error) {
+func SessionID() (string, error) {
 	b := make([]byte, 16)
 	n, err := rand.Read(b)
 	if n != len(b) || err != nil {
@@ -102,21 +108,21 @@ func sessionID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func CloseConnection(session string) {
+func CloseConnection(sess string) {
 	connections.Lock()
-	connections.m[session].Close()
-	connections.m[session] = nil
+	connections.m[sess].Close()
+	connections.m[sess] = nil
 	connections.Unlock()
-	log.Println("Connection closed for session ID:", session)
+	log.Println("Connection closed for session ID:", sess)
 }
 
-func AddConnection(session string, connection *websocket.Conn) {
+func AddConnection(sess string, connection *websocket.Conn) {
 	connections.Lock()
-	connections.m[session] = connection
+	connections.m[sess] = connection
 	connections.Unlock()
 }
 
-func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn, sess string) {
+func ProcessMessages(respWriter http.ResponseWriter, connection *websocket.Conn, sess string) {
 	writer := kafka.NewWriter(kafka.WriterConfig{Brokers: brokers,
 		Topic: subsEvents})
 
@@ -144,8 +150,6 @@ func processMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 		} else {
 			writer.WriteMessages(context.Background(), kafka.Message{Value: bytes})
 		}
-
-		go kafkaSubscriber.subscribe(sess, subscriberCallback)
 	}
 }
 
@@ -156,7 +160,7 @@ func GetWS(sessionID string) (*websocket.Conn, bool) {
 	return conn, ok
 }
 
-func subscriberCallback(sess string, value []byte, offset int64) {
+func SubscriberCallback(sess string, value []byte, offset int64) {
 	msg := fmt.Sprintf("message at offset %d: %s\n", offset, string(value))
 	if conn, ok := GetWS(sess); ok {
 		if conn != nil {
@@ -169,13 +173,13 @@ func subscriberCallback(sess string, value []byte, offset int64) {
 	}
 }
 
-func tryToRestoreWebapi() {
+func TryToRestoreWebapi() {
 	redisApi := RedisApi{}
-	redisApi.connect()
-	defer redisApi.disconnect()
+	redisApi.Connect()
+	defer redisApi.Disconnect()
 
-	sessions := redisApi.getIndex(sessionsIndex)
-	for _, session := range sessions {
-		AddConnection(session, nil)
+	sessions := redisApi.GetIndex(sessionsIndex)
+	for _, sess := range sessions {
+		AddConnection(sess, nil)
 	}
 }

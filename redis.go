@@ -10,7 +10,7 @@ type RedisApi struct {
 	pool *redis.Pool
 }
 
-func (r *RedisApi) connect() error {
+func (r *RedisApi) Connect() error {
 	log.Println("Initializing redis pool.")
 	r.pool = &redis.Pool{
 		Dial: func() (redis.Conn, error) {
@@ -27,12 +27,12 @@ func (r *RedisApi) connect() error {
 	return r.pool.Get().Err()
 }
 
-func (r *RedisApi) disconnect() error {
+func (r *RedisApi) Disconnect() error {
 	log.Println("Closing redis pool.")
 	return r.pool.Close()
 }
 
-func (r *RedisApi) save(key string, value string) {
+func (r *RedisApi) Save(key string, value string) {
 	log.Println("Saving to redis.", key, value)
 	conn := r.pool.Get()
 	defer conn.Close()
@@ -42,7 +42,7 @@ func (r *RedisApi) save(key string, value string) {
 	}
 }
 
-func (r *RedisApi) read(key string) []string {
+func (r *RedisApi) Read(key string) []string {
 	result := []string{}
 	conn := r.pool.Get()
 	defer conn.Close()
@@ -57,7 +57,7 @@ func (r *RedisApi) read(key string) []string {
 	return result
 }
 
-func (r *RedisApi) remove(key string, value string) {
+func (r *RedisApi) Remove(key string, value string) {
 	log.Println("Deleting from redis:", key, value)
 	conn := r.pool.Get()
 	defer conn.Close()
@@ -68,7 +68,7 @@ func (r *RedisApi) remove(key string, value string) {
 	}
 }
 
-func (r *RedisApi) addToIndex(index string, topic string) {
+func (r *RedisApi) AddToIndex(index string, topic string) {
 	log.Println("Adding to redis index", index, topic)
 	conn := r.pool.Get()
 	defer conn.Close()
@@ -79,7 +79,7 @@ func (r *RedisApi) addToIndex(index string, topic string) {
 	}
 }
 
-func (r *RedisApi) getIndex(key string) []string {
+func (r *RedisApi) GetIndex(key string) []string {
 	result := []string{}
 	conn := r.pool.Get()
 	defer conn.Close()
@@ -93,7 +93,7 @@ func (r *RedisApi) getIndex(key string) []string {
 	return result
 }
 
-func (r *RedisApi) isSubscribed(session string, topic string) bool {
+func (r *RedisApi) IsSubscribed(session string, topic string) bool {
 	conn := r.pool.Get()
 	defer conn.Close()
 

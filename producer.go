@@ -14,15 +14,15 @@ const (
 	topicTwo = "Topic-2"
 )
 
-func startProducer() {
+func StartProducer() {
 	log.Println("Starting the producer")
 	wg.Add(1)
-	go publishTopic(topicOne)
+	go PublishTopic(topicOne)
 	wg.Add(1)
-	go publishTopic(topicTwo)
+	go PublishTopic(topicTwo)
 }
 
-func publishTopic(topic string) {
+func PublishTopic(topic string) {
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: brokers,
 		Topic:   topic,

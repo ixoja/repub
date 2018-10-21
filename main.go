@@ -30,11 +30,11 @@ func main() {
 
 	switch mode {
 	case webapi:
-		startWebServer()
+		StartWebServer()
 	case server:
-		startServer()
+		StartServer()
 	case producer:
-		startProducer()
+		StartProducer()
 	default:
 		log.Fatal("Not recognized mode. Please set mode to webapi, server or producer.")
 	}

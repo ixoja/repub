@@ -9,8 +9,8 @@ import (
 )
 
 type Subscriber interface {
-	subscribe(topic string, callback func(topic string, message []byte, offset int64))
-	unsubscribe(topic string)
+	Subscribe(topic string, callback func(topic string, message []byte, offset int64))
+	Unsubscribe(topic string)
 }
 
 type KafkaSubscriber struct {
@@ -24,7 +24,7 @@ func NewSubscriber() *KafkaSubscriber {
 	return kafkaSubscriber
 }
 
-func (ks *KafkaSubscriber) subscribe(topic string, callback func(string, []byte, int64)) {
+func (ks *KafkaSubscriber) Subscribe(topic string, callback func(string, []byte, int64)) {
 	wg.Add(1)
 	defer wg.Done()
 
@@ -38,11 +38,11 @@ func (ks *KafkaSubscriber) subscribe(topic string, callback func(string, []byte,
 	ks.mutex.RUnlock()
 
 	kafkaReader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:   brokers,
-		Topic:     topic,
-		GroupID:   "group",
-		MinBytes:  10e3, // 10KB
-		MaxBytes:  10e6, // 10MB
+		Brokers:  brokers,
+		Topic:    topic,
+		GroupID:  "group",
+		MinBytes: 10e3, // 10KB
+		MaxBytes: 10e6, // 10MB
 	})
 
 	quit := make(chan bool)
@@ -53,10 +53,10 @@ func (ks *KafkaSubscriber) subscribe(topic string, callback func(string, []byte,
 
 	defer kafkaReader.Close()
 
-	ks.readerLoop(kafkaReader, quit, topic, callback)
+	ks.ReaderLoop(kafkaReader, quit, topic, callback)
 }
 
-func (ks *KafkaSubscriber) readerLoop(kafkaReader *kafka.Reader,
+func (ks *KafkaSubscriber) ReaderLoop(kafkaReader *kafka.Reader,
 	quit chan bool,
 	topic string,
 	callback func(string, []byte, int64)) {
@@ -80,7 +80,7 @@ func (ks *KafkaSubscriber) readerLoop(kafkaReader *kafka.Reader,
 	}
 }
 
-func (ks *KafkaSubscriber) unsubscribe(topic string) {
+func (ks *KafkaSubscriber) Unsubscribe(topic string) {
 	log.Println("Unsubscribing from topic:", topic)
 	ks.mutex.RLock()
 	quit, ok := ks.activeSubscriptions[topic]

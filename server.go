@@ -13,26 +13,26 @@ var redisApi RedisApi = RedisApi{}
 
 const topicsIndex = "topics"
 
-func startServer() {
-	if err := redisApi.connect(); err != nil {
+func StartServer() {
+	if err := redisApi.Connect(); err != nil {
 		log.Fatal("Could not successfully connect to Redis. ", err)
 	}
-	tryToRestoreServer()
+	TryToRestoreServer()
 
 	log.Println("Subscribing to kafka topic:", subsEvents)
-	go kafkaSubscriber.subscribe(subsEvents, ReactToSubscriptionEvents)
+	go kafkaSubscriber.Subscribe(subsEvents, ReactToSubscriptionEvents)
 
 	log.Println("Server successfully started.")
 
 	wg.Wait()
 }
 
-func tryToRestoreServer() {
-	topics := redisApi.getIndex(topicsIndex)
+func TryToRestoreServer() {
+	topics := redisApi.GetIndex(topicsIndex)
 	for _, topic := range topics {
-		sessions := redisApi.read(topic)
-		for _, session := range sessions {
-			go subscribeToKafka(session, topic)
+		sessions := redisApi.Read(topic)
+		for _, sess := range sessions {
+			go SubscribeToKafka(sess, topic)
 		}
 	}
 }
@@ -41,16 +41,16 @@ func ReactToSubscriptionEvents(key string, value []byte, offset int64) {
 	subsEvent := &SubscriptionEvent{}
 	proto.Unmarshal(value, subsEvent)
 
-	session := subsEvent.GetSession()
+	sess := subsEvent.GetSession()
 	topic := subsEvent.GetTopic()
 	shouldSubscribe := subsEvent.GetSubscribe()
 
 	kafkaWriter := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: brokers,
-		Topic:   session,
+		Topic:   sess,
 	})
 	message := fmt.Sprintf("Received a subscription event. SessionID=%s, Topic=%s, Subscribe=%t",
-		session,
+		sess,
 		topic,
 		shouldSubscribe)
 	log.Println(message)
@@ -59,45 +59,45 @@ func ReactToSubscriptionEvents(key string, value []byte, offset int64) {
 		kafka.Message{Value: []byte(message)})
 
 	if shouldSubscribe {
-		subscribeToChannel(session, topic)
+		SubscribeToChannel(sess, topic)
 	} else {
-		unsubscribeFromChannel(session, topic)
+		UnsubscribeFromChannel(sess, topic)
 	}
 }
 
-func subscribeToChannel(session string, topic string) {
-	if !redisApi.isSubscribed(session, topic) {
-		log.Println("Initializing subscription for session", session, "on topic", topic)
-		redisApi.save(session, topic)
-		redisApi.save(topic, session)
-		redisApi.addToIndex(topicsIndex, topic)
-		redisApi.addToIndex(sessionsIndex, session)
+func SubscribeToChannel(sess string, topic string) {
+	if !redisApi.IsSubscribed(sess, topic) {
+		log.Println("Initializing subscription for session", sess, "on topic", topic)
+		redisApi.Save(sess, topic)
+		redisApi.Save(topic, sess)
+		redisApi.AddToIndex(topicsIndex, topic)
+		redisApi.AddToIndex(sessionsIndex, sess)
 
-		subscribeToKafka(session, topic)
+		SubscribeToKafka(sess, topic)
 	}
 }
 
-func unsubscribeFromChannel(session string, topic string) {
-	redisApi.remove(session, topic)
-	redisApi.remove(topic, session)
+func UnsubscribeFromChannel(sess string, topic string) {
+	redisApi.Remove(sess, topic)
+	redisApi.Remove(topic, sess)
 }
 
-func subscribeToKafka(session string, topic string) {
+func SubscribeToKafka(sess string, topic string) {
 	callback := func(topic string, value []byte, offset int64) {
-		sessionsToUpdate := redisApi.read(topic)
+		sessionsToUpdate := redisApi.Read(topic)
 		if len(sessionsToUpdate) == 0 {
 			log.Println("Received update for 0 sessions. Unsubscribing from topic:", topic)
-			kafkaSubscriber.unsubscribe(topic)
+			kafkaSubscriber.Unsubscribe(topic)
 		}
-		for _, session := range sessionsToUpdate {
+		for _, sess := range sessionsToUpdate {
 			kafkaWriter := kafka.NewWriter(kafka.WriterConfig{
 				Brokers: brokers,
-				Topic:   session,
+				Topic:   sess,
 			})
 
 			kafkaWriter.WriteMessages(context.Background(), kafka.Message{Value: value})
 		}
 	}
 
-	go kafkaSubscriber.subscribe(topic, callback)
+	go kafkaSubscriber.Subscribe(topic, callback)
 }
