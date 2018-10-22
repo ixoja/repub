@@ -17,7 +17,10 @@ func StartServer() {
 	if err := redisApi.Connect(); err != nil {
 		log.Fatal("Could not successfully connect to Redis. ", err)
 	}
-	TryToRestoreServer()
+	err := TryToRestoreServer()
+	if err != nil {
+		log.Println("WARN: error during server restore.", err)
+	}
 
 	log.Println("Subscribing to kafka topic:", subsEvents)
 	go kafkaSubscriber.Subscribe(subsEvents, ReactToSubscriptionEvents)
@@ -27,19 +30,30 @@ func StartServer() {
 	wg.Wait()
 }
 
-func TryToRestoreServer() {
-	topics := redisApi.GetIndex(topicsIndex)
+func TryToRestoreServer() error {
+	topics, err := redisApi.GetIndex(topicsIndex)
+	if err != nil {
+		return err
+	}
 	for _, topic := range topics {
-		sessions := redisApi.Read(topic)
+		sessions, err := redisApi.Read(topic)
+		if err != nil {
+			return err
+		}
 		for _, sess := range sessions {
 			go SubscribeToKafka(sess, topic)
 		}
 	}
+	return nil
 }
 
-func ReactToSubscriptionEvents(key string, value []byte, offset int64) {
+func ReactToSubscriptionEvents(key string, value []byte, offset int64) bool {
 	subsEvent := &SubscriptionEvent{}
-	proto.Unmarshal(value, subsEvent)
+	err := proto.Unmarshal(value, subsEvent)
+	if err != nil {
+		log.Println("WARN: could not unmarshal a SubscriptionEvent. Skipping.")
+		return true
+	}
 
 	sess := subsEvent.GetSession()
 	topic := subsEvent.GetTopic()
@@ -55,36 +69,89 @@ func ReactToSubscriptionEvents(key string, value []byte, offset int64) {
 		shouldSubscribe)
 	log.Println(message)
 
-	kafkaWriter.WriteMessages(context.Background(),
-		kafka.Message{Value: []byte(message)})
+	err = kafkaWriter.WriteMessages(context.Background(), kafka.Message{Value: []byte(message)})
+	if err != nil {
+		log.Println("Error when writing to kafka.", err)
+		return false
+	}
 
 	if shouldSubscribe {
-		SubscribeToChannel(sess, topic)
+		err = SubscribeToChannel(sess, topic)
+		if err != nil {
+			log.Println("Error when subscribing to message channel.", err)
+			return false
+		}
 	} else {
-		UnsubscribeFromChannel(sess, topic)
+		err = UnsubscribeFromChannel(sess, topic)
+		if err != nil {
+			log.Println("Error when unsubscribing from message channel.", err)
+			return false
+		}
+		return false
 	}
+
+	return true
 }
 
-func SubscribeToChannel(sess string, topic string) {
-	if !redisApi.IsSubscribed(sess, topic) {
+func SubscribeToChannel(sess string, topic string) error {
+	isSub, err := redisApi.IsSubscribed(sess, topic)
+	if err != nil {
+		return err
+	}
+
+	if !isSub {
 		log.Println("Initializing subscription for session", sess, "on topic", topic)
-		redisApi.Save(sess, topic)
-		redisApi.Save(topic, sess)
-		redisApi.AddToIndex(topicsIndex, topic)
-		redisApi.AddToIndex(sessionsIndex, sess)
+		err := redisApi.Save(sess, topic)
+		if err != nil {
+			return err
+		}
+		err = redisApi.Save(topic, sess)
+		if err != nil {
+			return err
+		}
+		err = redisApi.AddToIndex(topicsIndex, topic)
+		if err != nil {
+			return err
+		}
+		err = redisApi.AddToIndex(sessionsIndex, sess)
+		if err != nil {
+			return err
+		}
 
 		SubscribeToKafka(sess, topic)
 	}
+	return nil
 }
 
-func UnsubscribeFromChannel(sess string, topic string) {
-	redisApi.Remove(sess, topic)
-	redisApi.Remove(topic, sess)
+func UnsubscribeFromChannel(sess string, topic string) error {
+	log.Println("Unsubscribing session", sess, "from topic", topic)
+	isSub, err := redisApi.IsSubscribed(sess, topic)
+	if err != nil {
+		return err
+	}
+	if !isSub {
+		log.Println("Session", sess, "wasn't subscribed on topic", topic, " - skipping.")
+		return nil
+	}
+
+	err = redisApi.Remove(sess, topic)
+	if err != nil {
+		return err
+	}
+	err = redisApi.Remove(topic, sess)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func SubscribeToKafka(sess string, topic string) {
-	callback := func(topic string, value []byte, offset int64) {
-		sessionsToUpdate := redisApi.Read(topic)
+	callback := func(topic string, value []byte, offset int64) bool {
+		sessionsToUpdate, err := redisApi.Read(topic)
+		if err != nil {
+			log.Println("WARN: could not read a topic from redis.", err)
+			return false
+		}
 		if len(sessionsToUpdate) == 0 {
 			log.Println("Received update for 0 sessions. Unsubscribing from topic:", topic)
 			kafkaSubscriber.Unsubscribe(topic)
@@ -95,8 +162,14 @@ func SubscribeToKafka(sess string, topic string) {
 				Topic:   sess,
 			})
 
-			kafkaWriter.WriteMessages(context.Background(), kafka.Message{Value: value})
+			err := kafkaWriter.WriteMessages(context.Background(), kafka.Message{Value: value})
+			if err != nil {
+				log.Println("WARN: could not write a message to kafka.", err)
+				return false
+			}
 		}
+
+		return true
 	}
 
 	go kafkaSubscriber.Subscribe(topic, callback)

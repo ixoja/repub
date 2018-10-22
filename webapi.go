@@ -139,16 +139,17 @@ func ProcessMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 			log.Println(err)
 			break
 		}
-		log.Println("Received a subscription event. Session:", pb.GetSession(),
+		pb.Session = sess
+		log.Println("Received a subscription event from UI. Session:", pb.GetSession(),
 			"Topic:", pb.GetTopic(),
 			"Subscribe:", pb.GetSubscribe())
 
-		pb.Session = sess
 		if bytes, err := proto.Marshal(&pb); err != nil {
 			log.Println(err)
 			break
 		} else {
 			writer.WriteMessages(context.Background(), kafka.Message{Value: bytes})
+			log.Println("Subscription event sent to kafka.")
 		}
 	}
 }
@@ -160,26 +161,39 @@ func GetWS(sessionID string) (*websocket.Conn, bool) {
 	return conn, ok
 }
 
-func SubscriberCallback(sess string, value []byte, offset int64) {
+func SubscriberCallback(sess string, value []byte, offset int64) bool {
 	msg := fmt.Sprintf("message at offset %d: %s\n", offset, string(value))
-	if conn, ok := GetWS(sess); ok {
-		if conn != nil {
-			err := conn.WriteMessage(websocket.TextMessage, []byte(msg))
-			if err != nil {
-				log.Println("write:", err)
-			}
-		} else { /*TODO: add buffering logic for disconnected sessions*/
-		}
+
+	conn, ok := GetWS(sess)
+	if !ok || conn == nil {
+		log.Println("SubscriberCallback: could not find connection for session", sess)
+		return false
 	}
+
+	err := conn.WriteMessage(websocket.TextMessage, []byte(msg))
+	if err != nil {
+		log.Println("write:", err)
+		return false
+	}
+	return true
 }
 
-func TryToRestoreWebapi() {
+func TryToRestoreWebapi() error {
 	redisApi := RedisApi{}
-	redisApi.Connect()
+	err := redisApi.Connect()
+	if err != nil {
+		return err
+	}
+
 	defer redisApi.Disconnect()
 
-	sessions := redisApi.GetIndex(sessionsIndex)
+	sessions, err := redisApi.GetIndex(sessionsIndex)
+	if err != nil {
+		return err
+	}
 	for _, sess := range sessions {
 		AddConnection(sess, nil)
 	}
+
+	return nil
 }
