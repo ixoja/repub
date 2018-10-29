@@ -5,10 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	fmt "fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	addr     = flag.String("addr", "localhost:8080", "http service address")
+	PORT     = "8080"
 	upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
@@ -36,12 +36,17 @@ const sessionString = "session"
 const sessionsIndex = "sessions"
 
 func StartWebServer() {
+	var HTML string
+	if HTML = os.Getenv("HTML"); HTML == "" {
+		HTML = "./html"
+	}
+
 	TryToRestoreWebapi()
-	http.Handle("/", http.FileServer(http.Dir("./html")))
+	http.Handle("/", http.FileServer(http.Dir(HTML)))
 	http.HandleFunc("/login", Login)
 	http.HandleFunc("/getTweets", GetTweets)
-	log.Println("Registering web server on:", addr)
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	log.Println("Registering web server on port:", PORT)
+	log.Fatal(http.ListenAndServe(":"+PORT, nil))
 }
 
 func ExtractSession(request *http.Request) (string, bool) {
