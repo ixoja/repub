@@ -5,19 +5,21 @@
    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
    <script language = "javascript" type = "text/javascript">
 
-      var wsUri = "ws://localhost:8080/getTweets";
       var output;
 		
       function init() {
          output = document.getElementById("output");
-         $.get( "http://localhost:8080/login", function(output, status, xhr) { 
+         var url = document.URL;
+         var loginUrl = url + "login"
+         var wsUrl = url.replace("http", "ws") + "getTweets"
+         $.get(loginUrl, function(output, status, xhr) { 
             writeToScreen("Logged in successfully.");
-            startWebSocket();
+            startWebSocket(wsUrl);
          });
       }
 
-      function startWebSocket() {
-         websocket = new WebSocket(wsUri);
+      function startWebSocket(wsUrl) {
+         websocket = new WebSocket(wsUrl);
 			
          websocket.onopen = function(evt) {
             onOpen(evt)

@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  repub:
+    container_name: repub
+    image: scratch
+    build: .
+    command: /bin/main -mode server
+    volumes:
+      - ./main:/bin/main
+      - ./html:/bin/html
+    ports:
+      - "8080:8080"
+    environment:
+      HTML: "/bin/html"
+    depends_on:
+      - redis
+  redis:
+    image: redis

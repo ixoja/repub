@@ -185,7 +185,7 @@ func SubscriberCallback(sess string, value []byte, offset int64) bool {
 
 func TryToRestoreWebapi() error {
 	redisApi := RedisApi{}
-	err := redisApi.Connect()
+	err := redisApi.Connect(REDIS_HOST + ":" + redisPort)
 	if err != nil {
 		return err
 	}

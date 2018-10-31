@@ -10,11 +10,11 @@ type RedisApi struct {
 	pool *redis.Pool
 }
 
-func (r *RedisApi) Connect() error {
+func (r *RedisApi) Connect(host string) error {
 	log.Println("Initializing redis pool.")
 	r.pool = &redis.Pool{
 		Dial: func() (redis.Conn, error) {
-			c, err := redis.Dial("tcp", "127.0.0.1:6379")
+			c, err := redis.Dial("tcp", host)
 			if err != nil {
 				return nil, err
 			}

@@ -14,7 +14,7 @@ var redisApi RedisApi = RedisApi{}
 const topicsIndex = "topics"
 
 func StartServer() {
-	if err := redisApi.Connect(); err != nil {
+	if err := redisApi.Connect(REDIS_HOST + ":" + redisPort); err != nil {
 		log.Fatal("Could not successfully connect to Redis. ", err)
 	}
 	err := TryToRestoreServer()

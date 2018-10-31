@@ -1,0 +1,67 @@
+version: '3'
+
+services:
+  webapi:
+    container_name: webapi
+    image: scratch
+    build: .
+    command: /bin/main -mode webapi
+    volumes:
+      - ./main:/bin/main
+      - ./html:/bin/html
+    networks:
+      app_net:
+        ipv4_address: 172.20.0.2
+    ports:
+      - "8080:8080"
+    environment:
+      HTML: "/bin/html"
+      REDIS_HOST: "172.20.0.3"
+      KAFKA_HOST: "172.20.0.4"
+    depends_on:
+      - redis
+      - kafka
+  server:
+    container_name: server
+    image: scratch
+    build: .
+    command: /bin/main -mode server
+    volumes:
+      - ./main:/bin/main
+      - ./html:/bin/html
+    networks:
+      app_net:
+        ipv4_address: 172.20.0.5
+    environment:
+      HTML: "/bin/html"
+      REDIS_HOST: "172.20.0.3"
+      KAFKA_HOST: "172.20.0.4"
+    depends_on:
+      - redis
+      - kafka
+  redis:
+    image: redis
+    networks:
+      app_net:
+        ipv4_address: 172.20.0.3
+  kafka:
+    image: spotify/kafka
+    ports:
+      - "2181:2181"
+      - "9092:9092"
+    environment:
+      - "ADVERTISED_HOST=kafka"
+      - "ADVERTISED_PORT=9092"
+      - "AUTO_CREATE_TOPICS=true"
+    networks:
+      app_net:
+        ipv4_address: 172.20.0.4
+networks:
+  app_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.20.0.0/24
