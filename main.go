@@ -13,6 +13,7 @@ var (
 	brokers         []string
 	wg              sync.WaitGroup
 	kafkaSubscriber = NewSubscriber()
+	redisApi        = RedisApi{}
 )
 
 const (

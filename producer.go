@@ -31,11 +31,16 @@ func PublishTopic(topic string) {
 	defer wg.Done()
 
 	for {
-		writer.WriteMessages(context.Background(),
+		err := writer.WriteMessages(context.Background(),
 			kafka.Message{
 				Value: []byte(fmt.Sprint(topic, time.Now())),
 			},
 		)
+
+		if err != nil {
+			log.Println("Could not write to kafka, error:", err)
+			break
+		}
 
 		log.Println("message produced", topic)
 		time.Sleep(2 * time.Second)

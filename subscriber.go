@@ -26,9 +26,13 @@ func NewSubscriber() *KafkaSubscriber {
 
 func (ks *KafkaSubscriber) Subscribe(topic string, callback func(string, []byte, int64) bool) {
 	wg.Add(1)
+	go ks.SubscriptionRoutine(topic, callback)
+}
+
+func (ks *KafkaSubscriber) SubscriptionRoutine(topic string, callback func(string, []byte, int64) bool) {
+	log.Println("Subscribe method called for topic:", topic)
 	defer wg.Done()
 
-	log.Println("Subscribe method called for topic:", topic)
 	ks.mutex.RLock()
 	if _, ok := ks.activeSubscriptions[topic]; ok {
 		ks.mutex.RUnlock()
@@ -89,7 +93,7 @@ func (ks *KafkaSubscriber) ReaderLoop(kafkaReader *kafka.Reader,
 					break
 				}
 			} else {
-				log.Println("Kafka subscription callback didn't secceed. Closing reader.")
+				log.Println("Kafka subscription callback didn't succeed. Closing reader.")
 				err = kafkaReader.Close()
 				if err != nil {
 					log.Println("Error closing Kafka reader: ", err)

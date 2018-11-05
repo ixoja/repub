@@ -117,3 +117,20 @@ func (r *RedisApi) IsSubscribed(session string, topic string) (bool, error) {
 		return false, nil
 	}
 }
+
+func (r *RedisApi) IsInIndex(index string, key string) (bool, error) {
+	conn := r.pool.Get()
+	defer conn.Close()
+
+	res, err := redis.Int(conn.Do("SISMEMBER", index, key))
+	if err != nil {
+		log.Println(err)
+		return false, err
+	}
+
+	if res == 1 {
+		return true, nil
+	} else {
+		return false, nil
+	}
+}

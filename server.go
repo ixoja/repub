@@ -9,21 +9,21 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-var redisApi RedisApi = RedisApi{}
-
 const topicsIndex = "topics"
 
 func StartServer() {
 	if err := redisApi.Connect(REDIS_HOST + ":" + redisPort); err != nil {
 		log.Fatal("Could not successfully connect to Redis. ", err)
 	}
+	redisApi.AddToIndex(topicsIndex, topicOne)
+
 	err := TryToRestoreServer()
 	if err != nil {
 		log.Println("WARN: error during server restore.", err)
 	}
 
 	log.Println("Subscribing to kafka topic:", subsEvents)
-	go kafkaSubscriber.Subscribe(subsEvents, ReactToSubscriptionEvents)
+	kafkaSubscriber.Subscribe(subsEvents, ReactToSubscriptionEvents)
 
 	log.Println("Server successfully started.")
 
@@ -41,7 +41,7 @@ func TryToRestoreServer() error {
 			return err
 		}
 		for _, sess := range sessions {
-			go SubscribeToKafka(sess, topic)
+			SubscribeToKafka(sess, topic)
 		}
 	}
 	return nil
@@ -172,5 +172,5 @@ func SubscribeToKafka(sess string, topic string) {
 		return true
 	}
 
-	go kafkaSubscriber.Subscribe(topic, callback)
+	kafkaSubscriber.Subscribe(topic, callback)
 }

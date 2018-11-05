@@ -32,8 +32,11 @@ var (
 	}{m: make(map[string]*websocket.Conn)}
 )
 
-const sessionString = "session"
-const sessionsIndex = "sessions"
+const (
+	unknownSession = "Unknown session."
+	sessionString  = "session"
+	sessionsIndex  = "sessions"
+)
 
 func StartWebServer() {
 	var HTML string
@@ -41,7 +44,14 @@ func StartWebServer() {
 		HTML = "./html"
 	}
 
-	TryToRestoreWebapi()
+	err := redisApi.Connect(REDIS_HOST + ":" + redisPort)
+	if err != nil {
+		log.Println("Could not connect to Redis. Exiting.")
+		return
+	}
+
+	defer redisApi.Disconnect()
+
 	http.Handle("/", http.FileServer(http.Dir(HTML)))
 	http.HandleFunc("/login", Login)
 	http.HandleFunc("/getTweets", GetTweets)
@@ -49,22 +59,38 @@ func StartWebServer() {
 	log.Fatal(http.ListenAndServe(":"+PORT, nil))
 }
 
-func ExtractSession(request *http.Request) (string, bool) {
-	if sessionCookie, err := request.Cookie(sessionString); err == nil {
-		sess := sessionCookie.Value
-		_, knownSession := GetWS(sess)
-		if knownSession {
-			return sess, true
-		}
+func IsKnownSession(sess string) (bool, error) {
+	knownSession, err := redisApi.IsInIndex(sessionsIndex, sess)
+	if err != nil {
+		log.Println("Could not successfully search for a session in Redis.", err)
+		return false, err
 	}
 
-	return "", false
+	return knownSession, nil
 }
 
-func Login(respWriter http.ResponseWriter, request *http.Request) {
-	if sess, ok := ExtractSession(request); ok {
-		log.Println("Logging in a known user. Session id:", sess)
-		return
+func Login(w http.ResponseWriter, r *http.Request) {
+	sessionCookie, err := r.Cookie(sessionString)
+
+	if err == nil {
+		sess := sessionCookie.Value
+		knownSession, err := IsKnownSession(sess)
+		if err != nil {
+			log.Println("Failed to log in a user.")
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if knownSession {
+			if _, ok := GetWS(sess); ok {
+				warn := "WARN: Trying to log in a user with already session."
+				log.Println(warn, "Session id:", sess)
+				http.Error(w, warn, 403)
+				return
+			} else {
+				log.Println("Logging in a known user. Session id:", sess)
+				return
+			}
+		}
 	}
 
 	log.Println("Starting a new session")
@@ -73,35 +99,60 @@ func Login(respWriter http.ResponseWriter, request *http.Request) {
 	cookie := http.Cookie{Name: sessionString,
 		Value:   sess,
 		Expires: time.Now().Add(time.Duration(time.Hour * 24 * 30))}
-	http.SetCookie(respWriter, &cookie)
+	http.SetCookie(w, &cookie)
 
-	AddConnection(sess, nil)
+	err = redisApi.AddToIndex(sessionsIndex, sess)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
 	log.Println("Session ID created: ", sess)
-	fmt.Fprint(respWriter, "{OK}")
+	fmt.Fprint(w, "{OK}")
 }
 
-func GetTweets(respWriter http.ResponseWriter, request *http.Request) {
-	sess, ok := ExtractSession(request)
-	if !ok {
-		log.Print("Unknown session")
+func GetTweets(w http.ResponseWriter, r *http.Request) {
+	sessionCookie, err := r.Cookie(sessionString)
+
+	if err != nil {
+		log.Println(unknownSession, "You need to log in first.")
+		http.Error(w, err.Error(), 403)
 		return
-	} else {
-		connection, err := upgrader.Upgrade(respWriter, request, nil)
-		if err != nil {
-			log.Print("WebSocket opening error:", err)
-			return
-		}
-
-		if c, ok := GetWS(sess); ok && c != nil {
-			log.Print("WARN: trying to establish connection for session, which is already connected. Session ID:", sess)
-			return
-		}
-		AddConnection(sess, connection)
-		defer CloseConnection(sess)
-		go kafkaSubscriber.Subscribe(sess, SubscriberCallback)
-
-		ProcessMessages(respWriter, connection, sess)
 	}
+
+	sess := sessionCookie.Value
+	knownSession, err := IsKnownSession(sess)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if !knownSession {
+		log.Println(unknownSession, sess)
+		http.Error(w, unknownSession, 403)
+		return
+	}
+
+	if _, ok := GetWS(sess); ok {
+		warn := "WARN: Call from a user with already session. Session id:"
+		log.Println(warn, "Session id:", sess)
+		http.Error(w, warn, 403)
+		return
+	}
+
+	connection, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Print("WebSocket opening error:", err)
+		return
+	}
+
+	if c, ok := GetWS(sess); ok && c != nil {
+		log.Print("WARN: trying to establish connection for session, which is already connected. Session ID:", sess)
+		return
+	}
+	AddConnection(sess, connection)
+	defer CloseConnection(sess)
+	kafkaSubscriber.Subscribe(sess, SubscriberCallback)
+
+	ProcessMessages(w, connection, sess)
+
 }
 
 func SessionID() (string, error) {
@@ -116,7 +167,7 @@ func SessionID() (string, error) {
 func CloseConnection(sess string) {
 	connections.Lock()
 	connections.m[sess].Close()
-	connections.m[sess] = nil
+	delete(connections.m, sess)
 	connections.Unlock()
 	log.Println("Connection closed for session ID:", sess)
 }
@@ -127,7 +178,7 @@ func AddConnection(sess string, connection *websocket.Conn) {
 	connections.Unlock()
 }
 
-func ProcessMessages(respWriter http.ResponseWriter, connection *websocket.Conn, sess string) {
+func ProcessMessages(w http.ResponseWriter, connection *websocket.Conn, sess string) {
 	writer := kafka.NewWriter(kafka.WriterConfig{Brokers: brokers,
 		Topic: subsEvents})
 
@@ -153,7 +204,12 @@ func ProcessMessages(respWriter http.ResponseWriter, connection *websocket.Conn,
 			log.Println(err)
 			break
 		} else {
-			writer.WriteMessages(context.Background(), kafka.Message{Value: bytes})
+			err := writer.WriteMessages(context.Background(), kafka.Message{Value: bytes})
+			if err != nil {
+				log.Println("Could not write to kafka, error:", err)
+				break
+			}
+
 			log.Println("Subscription event sent to kafka.")
 		}
 	}
@@ -181,24 +237,4 @@ func SubscriberCallback(sess string, value []byte, offset int64) bool {
 		return false
 	}
 	return true
-}
-
-func TryToRestoreWebapi() error {
-	redisApi := RedisApi{}
-	err := redisApi.Connect(REDIS_HOST + ":" + redisPort)
-	if err != nil {
-		return err
-	}
-
-	defer redisApi.Disconnect()
-
-	sessions, err := redisApi.GetIndex(sessionsIndex)
-	if err != nil {
-		return err
-	}
-	for _, sess := range sessions {
-		AddConnection(sess, nil)
-	}
-
-	return nil
 }
