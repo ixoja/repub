@@ -1,5 +1,5 @@
 # repub
-repub stands for "re-publisher". It is a pet project written by Ihor Khodzhaniiazov to try such languages, tools and technologies as:
+repub stands for "re-publisher". It is a pet project written by Ihor Khodzhaniiazov to try building a micro-service application, using such languages, tools and technologies as:
 - Go
 - Kafka 
 - Redis
@@ -26,3 +26,4 @@ After the executable is ready I just call `docker-compose up` and it puts all re
 - implement session expiration
 - add scalability by supporting multi-node api and server (rewrite session management)
 - add support of different data sources
+- refactor: split into packages
